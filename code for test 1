@@ -1,0 +1,1881 @@
+    def process_trade_data_for_mcx(self):
+
+        """Process OPTFUT/OPTCOM trade data"""
+        tradeObjIDX = OnlineTransactionMCX.objects.filter(transaction=self.pk)[0]
+        procObjIDX = PositionMCX.objects.filter(transaction=self.pk).filter(Q(symbol='OPTFUT')|Q(symbol='OPTCOM')).filter(position_date=tradeObjIDX.activity_time)
+        procClientObjIDX = procObjIDX.distinct('client_account_code')
+        # print(procClientObjIDX.count())
+
+        for clientItem in procClientObjIDX:
+            trdObjIDX = OnlineTransactionMCX.objects.filter(transaction=self.pk,account_id = clientItem.client_account_code).filter( Q(instrument_name='OPTFUT')|Q(instrument_name='OPTCOM'))
+            trdSecObjIDX = trdObjIDX.distinct('symbol')
+
+            if clientItem.client_account_code == "TRKKDC18":
+                print("TRKKDC18")
+            for secItem in trdSecObjIDX:
+                # if secItem.symbol == "GOLDM":
+                #     print("CRUDEOIL")
+                eachSecItemsObj = trdObjIDX.filter(symbol=secItem.symbol)
+                eachSecItemsExpObj = eachSecItemsObj.distinct('expiry_date')
+                for secItemExp in eachSecItemsExpObj:
+                    secItemStrike = trdObjIDX.filter(symbol=secItemExp.symbol,expiry_date = secItemExp.expiry_date)
+                    secItemStrikeDistinct = secItemStrike.distinct('strike_price')
+                    for strikeSPItems in secItemStrikeDistinct:
+                        strikeSPItemsObj = trdObjIDX.filter(symbol=strikeSPItems.symbol,
+                                                          expiry_date=strikeSPItems.expiry_date,
+                                                          strike_price=strikeSPItems.strike_price)
+                        strikeSPItemsObjDistinct = strikeSPItemsObj.distinct('option_type')
+                        for strikeItems in strikeSPItemsObjDistinct:
+                            strikeItemsObj = trdObjIDX.filter(symbol=strikeItems.symbol,expiry_date = strikeItems.expiry_date, strike_price = strikeItems.strike_price, option_type = strikeItems.option_type)
+                            eachSecItems = strikeItemsObj[0]
+                            dictMonNumteachoName = {'01': 'Jan', '02': 'Feb', '03': 'Mar', '04': 'Apr', '05': 'May', '06': 'Jun',
+                                                    '07': 'Jul', '08': 'Aug', '09': 'Sep', '10': 'Oct', '11': 'Nov', '12': 'Dec', }
+                            initDate = str(eachSecItems.expiry_date).split('-')
+                            from datetime import date, timedelta                # dt = datetime.combine(secItem.activity_time, datetime.min.time())
+                            if secItem.activity_time.isoweekday() == 1:
+                                prev_date = secItem.activity_time - timedelta(days=3)
+                                is_hol = Holiday.objects.filter(holiday_date=prev_date)
+                                if is_hol.exists():
+                                    prev_date = prev_date - timedelta(days=1)
+                            else:
+                                prev_date = secItem.activity_time - timedelta(days=1)
+
+                            # print(secItem.activity_time - timedelta(days=1))
+                            prevDate = str(prev_date).split("-")
+                            constrPrevDate = prevDate[2] + prevDate[1] + prevDate[0]
+                            constrExpDate = initDate[2] + dictMonNumteachoName.get(initDate[1]) + initDate[0]
+                            constSecurityId = str(self.pk)+str(eachSecItems.option_type) +str(eachSecItems.symbol) + constrExpDate + str(
+                                eachSecItems.strike_price) + str(clientItem.client_account_code)
+                            prevconstSecurityId = str(constrPrevDate)+str(eachSecItems.option_type) +str(eachSecItems.symbol) + constrExpDate + str(
+                                eachSecItems.strike_price) + str(clientItem.client_account_code)
+                            constSecurityNo = 'CF ' +  str(strikeItems.option_type) + ' '+ str(eachSecItems.symbol) + ' ' + constrExpDate + ' ' + str(
+                                eachSecItems.strike_price)
+                            constSecurityName = eachSecItems.symbol
+
+                            try:
+                                prodmastObj = ProductMCX.objects.filter(transaction=self.pk,symbol=eachSecItems.symbol,strike_price=eachSecItems.strike_price,instrument_name=strikeItems.instrument_name)[0]
+                            except:
+                                pass
+
+                            if constSecurityId == "M17102022CECRUDEOIL17Oct20227000TRAD010":
+                                print("Inside EO CE ADANIENT 30Apr2020 185")
+
+                            try:
+                                tradeHead = TradeDetail.objects.get(trade_security_id=constSecurityId,client=clientItem.client_account_code)
+                            except:
+                                tradeHead = TradeDetail()
+                                tradeHead.trade_security_id = constSecurityId
+                                tradeHead.trade_security_no = constSecurityNo
+                                tradeHead.trade_security_name = constSecurityName
+                            tradeHead.client = Client.objects.get(client_id=clientItem.client_account_code)
+                            tradeHead.trade_security_type = Enumeration.objects.get(enum_id='OPTFUT')
+                            tradeHead.trade_exchange = self.exchange
+                            tradeHead.transaction_id = self.pk
+                            tradeHead.symbol = eachSecItems.symbol
+                            tradeHead.expiry_date = eachSecItems.expiry_date
+                            tradeHead.instrument_type = eachSecItems.symbol
+                            tradeHead.trade_date = eachSecItems.activity_time
+                            tradeHead.save()
+                            tradeHead.refresh_from_db()
+
+                            for itemsObj in strikeItemsObj:
+                                tradeItems = TradeDetailItem()
+                                tradeItems.trade_security = tradeHead
+                                tradeItems.trade_sr = '2'
+                                tradeItems.trade_tr = 'TN'
+                                tradeItems.exchange = ' MCX'
+                                tradeItems.trade_no = itemsObj.trade_id
+                                # tradeItems.order_trade_time = itemsObj.last_modified_date.time()
+                                tradeItems.ctcl_id = itemsObj.order_no
+                                tradeItems.user_id = itemsObj.user_id
+                                if itemsObj.buy_sell_ind_id == 1:
+                                    tradeItems.buy_sell_opt = 'B'
+                                if itemsObj.buy_sell_ind_id == 2:
+                                    tradeItems.buy_sell_opt = 'S'
+                                trade_lot = int(prodmastObj.tradable_lot)
+                                trade_gen = int(prodmastObj.general_numerator/prodmastObj.general_denominator)
+                                tradeItems.quantity = itemsObj.trade_qty * int(prodmastObj.tradable_lot * (prodmastObj.general_numerator/prodmastObj.general_denominator))
+                                tradeItems.rate = itemsObj.trade_price
+
+                                """Construct Brokerage Logics"""
+                                try:
+                                    try:
+                                        brokLogic = ClientBrokerage.objects.get(client=clientItem.client_account_code,
+                                                                                client_exchange=Exchange.objects.get(
+                                                                                    exchange_id='MCX'),
+                                                                                from_date__lte=eachSecItems.activity_time)
+                                    except:
+                                        try:
+                                            brokLogic = \
+                                            ClientBrokerageHistory.objects.filter(client=clientItem.client_account_code,
+                                                                                  client_exchange=Exchange.objects.get(
+                                                                                      exchange_id='MCX')).filter(
+                                                Q(from_date__lte=eachSecItems.activity_time) & Q(
+                                                    thru_date__gte=eachSecItems.activity_time))[0]
+
+                                        except:
+                                            brokLogic = ClientBrokerage.objects.filter(
+                                                client=clientItem.client_account_code,
+                                                client_exchange=Exchange.objects.get(
+                                                    exchange_id='MCX'))[0]
+                                    # percenLogic = brokLogic.brok_percent.brokerage_one_side_percent
+                                    # minLogic = brokLogic.brok_percent.brokerage_one_side_min
+
+
+                                    lot = trade_lot
+                                    try:
+                                        brok_obj = BrokerageMCXItem.objects.get(module = brokLogic.brok_percent_mcx,derivative_symbol='EO')
+                                    except:
+                                        brok_obj = BrokerageMCXItem.objects.get(module=brokLogic.brok_percent_mcx, derivative_symbol='EO')
+                                    brok_perc = brok_obj.brokerage_one_side_percent
+                                    brok_min = brok_obj.brokerage_one_side_min * Decimal(tradeItems.quantity/lot)
+                                    brok_percentage = round((tradeItems.rate * brok_perc) / 100, 4)
+                                    res_round_val = Decimal(brok_percentage).quantize(Decimal('1.000'),
+                                                                                      rounding=ROUND_HALF_UP)
+
+                                    brok_tot_perc = tradeItems.quantity * res_round_val
+                                    if brok_tot_perc > brok_min:
+                                        tradeItems.brokerage = brok_tot_perc
+                                    if brok_min > brok_tot_perc:
+                                        tradeItems.brokerage = brok_min
+                                    tradeItems.brokerage_total = tradeItems.brokerage
+                                    if tradeItems.buy_sell_opt == 'S':
+                                        tradeItems.net_rate = tradeItems.rate + (tradeItems.brokerage/100)
+                                    if tradeItems.buy_sell_opt == 'B':
+                                        tradeItems.net_rate = tradeItems.rate + (tradeItems.brokerage/100)
+
+                                except:
+                                    tradeItems.brokerage = 0
+                                    tradeItems.brokerage_total = 0
+                                    tradeItems.brokerage_logic = '2m'
+                                    tradeItems.net_rate = tradeItems.rate
+
+                                    try:
+                                        clieBrokex = ClientBillWithoutBrokerage.objects.get(
+                                            client=Client.objects.get(client_id=clientItem.client_account_code))
+                                        pass
+                                    except:
+                                        clieWOBrok = ClientBillWithoutBrokerage()
+                                        clieWOBrok.transaction = self
+                                        clieWOBrok.client = Client.objects.get(client_id=clientItem.client_account_code)
+                                        clieWOBrok.save()
+                                        clieWOBrok.refresh_from_db()
+
+                                tradeItems.amount = round(tradeItems.quantity * tradeItems.net_rate, 2)
+                                tradeItems.pre_brok_amount = tradeItems.quantity * tradeItems.rate
+                                sttCharge = 0
+                                sdCharge = 0
+                                if tradeItems.buy_sell_opt == 'S':
+                                    try:
+                                        stt_charge = SecurityTransactionTax.objects.filter(status='Active',
+                                                                                           market_type=self.exchange)[0]
+                                        sttCharge = tradeItems.pre_brok_amount * (stt_charge.option_ctt_charge / 100)
+                                    except:
+                                        sttCharge = 0
+                                elif tradeItems.buy_sell_opt == 'B':
+                                    try:
+                                        sd_charge = StampDuty.objects.get(status='Active')
+                                        sdCharge = tradeItems.pre_brok_amount * (sd_charge.options_charge / 100)
+                                    except:
+                                        sdCharge = 0
+                                else:
+                                    sttCharge = 0
+                                    sdCharge = 0
+                                try:
+                                    clear_charge = ClearingCharges.objects.filter(status='Active')[0]
+                                    clearCharge = tradeItems.pre_brok_amount * (clear_charge.mcx_options / 100)
+                                except:
+                                    clearCharge = 0
+
+                                try:
+                                    try:
+                                        turnover_charge = Turnover.objects.filter(status='Active', market_type=self.exchange, scrip_group = prodmastObj.symbol)[0]
+                                    except:
+                                        turnover_charge = Turnover.objects.filter(status='Active', market_type=self.exchange,scrip_group='Main')[0]
+                                    turnCharge = tradeItems.pre_brok_amount * (turnover_charge.turn_over_charge_option / 100)
+                                except:
+                                    turnCharge = 0
+
+                                try:
+                                    gstin_charge = GSTIN.objects.filter(status='Active')[0]
+                                    gstin = tradeItems.pre_brok_amount * (stax_charge.igst / 100)
+                                except:
+                                    gstin = 0
+                                try:
+                                    sebi_charge = Sebi.objects.filter(status='Active')[0]
+                                    sebiCharge = tradeItems.pre_brok_amount * (sebi_charge.sebi_charge / 100)
+                                except:
+                                    sebiCharge = 0
+                                try:
+                                    stax_charge = ServiceCharge.objects.filter(status='Active')[0]
+                                    staxCharge = (tradeItems.brokerage_total + turnCharge + sebi_charge) * (stax_charge.rate / 100)
+                                except:
+                                    staxCharge = 0
+
+                                tradeItems.turnover = turnCharge
+                                tradeItems.stt = sttCharge
+                                tradeItems.service_tax = staxCharge
+                                tradeItems.sebi = sebiCharge
+                                tradeItems.stamp_duty = sdCharge
+                                tradeItems.clear_charge = clearCharge
+                                tradeItems.brok_amount = tradeItems.quantity * tradeItems.brokerage
+                                tradeItems.save()
+                                tradeItems.refresh_from_db()
+
+                            # if clientItem.client_account_code == 'TRCHCD08':
+                            #     print("TRCHCD08")
+
+                            """Construct Carry Forward Qty"""
+
+                            # if constSecurityId == "09042020CEBANKNIFTY09Apr202019600VSAPBM08":
+                            #     print("09042020CEBANKNIFTY09Apr202019600VSAPBM08")
+
+                            if str(secItem.activity_time) == '2020-04-01':
+                                # print(int(eachSecItems.strike_price))
+                                try:
+                                    pObj = PositionMCX.objects.get(transaction=self.pk,
+                                                         client_account_code=clientItem.client_account_code,
+                                                         instrument_type=eachSecItems.product_desc,
+                                                         symbol=eachSecItems.symbol,
+                                                         expiry_date=secItem.expiry_date,
+                                                         strike_price=eachSecItems.strike_price)
+                                    open_buy_qty = pObj.brought_forward_long_qty
+                                    open_sell_qty = pObj.brought_forward_short_qty
+                                except:
+                                    open_buy_qty = 0
+                                    open_sell_qty = 0
+                            else:
+                                try:
+                                    tdObj = TradeDetailItem.objects.get(trade_security__trade_security_id=prevconstSecurityId, trade_sr='5')
+                                    if tdObj.buy_sell_opt == 'S':
+                                        open_sell_qty = tdObj.quantity
+                                    else:
+                                        open_sell_qty = 0
+
+                                    if tdObj.buy_sell_opt == 'B':
+                                        open_buy_qty = tdObj.quantity
+                                    else:
+                                        open_buy_qty = 0
+
+                                except:
+                                    open_buy_qty = 0
+                                    open_sell_qty = 0
+
+                            trade_buy_qty = TradeDetailItem.objects.filter(trade_security=tradeHead, trade_sr=2, buy_sell_opt='B').aggregate(buy_total = Coalesce(Sum('quantity'),0))['buy_total']
+                            trade_sell_qty = TradeDetailItem.objects.filter(trade_security=tradeHead, trade_sr=2, buy_sell_opt='S').aggregate(sell_total=Coalesce(Sum('quantity'),0))['sell_total']
+                            day_cf_qty = (trade_sell_qty + open_sell_qty) - (trade_buy_qty + open_buy_qty)
+                            if day_cf_qty != 0:
+                                tradeItems = TradeDetailItem()
+                                tradeItems.trade_security = tradeHead
+                                tradeItems.trade_sr = '5'
+                                tradeItems.trade_tr = 'NA'
+                                tradeItems.exchange = 'MCX'
+                                tradeItems.expiry_date = secItem.expiry_date
+                                # tradeItems.trade_no = itemsObj.trade_id
+                                # tradeItems.order_trade_time = itemsObj.last_modified_date.time()
+                                # tradeItems.ctcl_id = itemsObj.order_no
+                                # tradeItems.user_id = itemsObj.user_id
+                                if day_cf_qty > 0:
+                                    tradeItems.quantity = day_cf_qty
+                                    tradeItems.buy_sell_opt = 'S'
+                                if day_cf_qty < 0:
+                                    tradeItems.quantity = day_cf_qty * -1
+                                    tradeItems.buy_sell_opt = 'B'
+
+                                tradeItems.rate = 0
+
+                                """Construct Brokerage Logics"""
+                                try:
+                                    try:
+                                        brokLogic = ClientBrokerage.objects.get(client=clientItem.client_account_code,
+                                                                                client_exchange=Exchange.objects.get(
+                                                                                    exchange_id='MCX'),
+                                                                                from_date__lte=eachSecItems.activity_time)
+                                    except:
+                                        try:
+                                            brokLogic = \
+                                            ClientBrokerageHistory.objects.filter(client=clientItem.client_account_code,
+                                                                                  client_exchange=Exchange.objects.get(
+                                                                                      exchange_id='MCX')).filter(
+                                                Q(from_date__lte=eachSecItems.activity_time) & Q(
+                                                    thru_date__gte=eachSecItems.activity_time))[0]
+
+                                        except:
+                                            brokLogic = ClientBrokerage.objects.filter(
+                                                client=clientItem.client_account_code,
+                                                client_exchange=Exchange.objects.get(
+                                                    exchange_id='MCX'))[0]
+
+
+
+                                    lot = trade_lot
+                                    try:
+                                        brok_obj = BrokerageMCXItem.objects.get(module = brokLogic.brok_percent_mcx,derivative_symbol='EO')
+                                    except:
+                                        brok_obj = BrokerageMCXItem.objects.get(module=brokLogic.brok_percent_mcx, derivative_symbol='EO')
+                                    brok_perc = brok_obj.brokerage_one_side_percent
+                                    brok_min = brok_obj.brokerage_one_side_min * (tradeItems.quantity/lot)
+                                    brok_percentage = round((tradeItems.rate * brok_perc) / 100, 4)
+                                    res_round_val = Decimal(brok_percentage).quantize(Decimal('1.000'),
+                                                                                      rounding=ROUND_HALF_UP)
+
+                                    brok_tot_perc = tradeItems.quantity * res_round_val
+                                    if brok_tot_perc > brok_min:
+                                        tradeItems.brokerage = brok_tot_perc
+                                    if brok_min > brok_tot_perc:
+                                        tradeItems.brokerage = brok_min
+                                    tradeItems.brokerage_total = tradeItems.brokerage
+                                    if tradeItems.buy_sell_opt == 'S':
+                                        tradeItems.net_rate = tradeItems.rate + (tradeItems.brokerage/100)
+                                    if tradeItems.buy_sell_opt == 'B':
+                                        tradeItems.net_rate = tradeItems.rate + (tradeItems.brokerage/100)
+
+                                except:
+                                    tradeItems.brokerage = 0
+                                    tradeItems.brokerage_total = 0
+                                    tradeItems.brokerage_logic = '2m'
+                                    tradeItems.net_rate = tradeItems.rate
+
+                                    try:
+                                        clieBrokex = ClientBillWithoutBrokerage.objects.get(
+                                            client=Client.objects.get(client_id=clientItem.client_account_code))
+                                        pass
+                                    except:
+                                        clieWOBrok = ClientBillWithoutBrokerage()
+                                        clieWOBrok.transaction = self
+                                        clieWOBrok.client = Client.objects.get(client_id=clientItem.client_account_code)
+                                        clieWOBrok.save()
+                                        clieWOBrok.refresh_from_db()
+
+                                tradeItems.amount = round(tradeItems.quantity * tradeItems.net_rate, 2)
+                                tradeItems.pre_brok_amount = tradeItems.quantity * tradeItems.rate
+                                sttCharge = 0
+                                sdCharge = 0
+                                if tradeItems.buy_sell_opt == 'S':
+                                    try:
+                                        stt_charge = SecurityTransactionTax.objects.filter(status='Active',
+                                                                                           market_type=self.exchange)[0]
+                                        sttCharge = tradeItems.pre_brok_amount * (stt_charge.option_ctt_charge / 100)
+                                    except:
+                                        sttCharge = 0
+                                elif tradeItems.buy_sell_opt == 'B':
+                                    try:
+                                        sd_charge = StampDuty.objects.get(status='Active')
+                                        sdCharge = tradeItems.pre_brok_amount * (sd_charge.options_charge / 100)
+                                    except:
+                                        sdCharge = 0
+                                else:
+                                    sttCharge = 0
+                                    sdCharge = 0
+                                try:
+                                    try:
+                                        turnover_charge = Turnover.objects.filter(status='Active', market_type=self.exchange, scrip_group = prodmastObj.symbol)[0]
+                                    except:
+                                        turnover_charge = Turnover.objects.filter(status='Active', market_type=self.exchange,scrip_group='Main')[0]
+                                    turnCharge = tradeItems.pre_brok_amount * (turnover_charge.turn_over_charge / 100)
+                                except:
+                                    turnCharge = 0
+                                try:
+                                    stax_charge = ServiceCharge.objects.filter(status='Active')[0]
+                                    staxCharge = (tradeItems.brokerage_total + turnCharge) * (stax_charge.rate / 100)
+                                except:
+                                    staxCharge = 0
+                                try:
+                                    gstin_charge = GSTIN.objects.filter(status='Active')[0]
+                                    gstin = tradeItems.pre_brok_amount * (stax_charge.igst / 100)
+                                except:
+                                    gstin = 0
+                                try:
+                                    sebi_charge = Sebi.objects.filter(status='Active')[0]
+                                    sebiCharge = tradeItems.pre_brok_amount * (sebi_charge.sebi_charge / 100)
+                                except:
+                                    sebiCharge = 0
+
+                                tradeItems.turnover = turnCharge
+                                tradeItems.stt = sttCharge
+                                tradeItems.service_tax = staxCharge
+                                tradeItems.sebi = sebiCharge
+                                tradeItems.stamp_duty = sdCharge
+                                tradeItems.brok_amount = tradeItems.quantity * tradeItems.brokerage
+                                tradeItems.save()
+                                tradeItems.refresh_from_db()
+                            else:
+                                pass
+
+                            # if secItem.activity_time == secItem.expiry_date:
+                            #     self.construct_asg_ex_mcx_01(self.pk,tradeHead)
+
+        """Process OPTFUT not exists logics"""
+        procObjNEIDX = PositionMCX.objects.filter(transaction=self.pk, symbol='OPTFUT',
+                                               expiry_date=tradeObjIDX.activity_time)
+        for neItems in procObjNEIDX:
+
+            onTransEObj = OnlineTransactionMCX.objects.filter(transaction=self.pk,
+                                                           account_id=neItems.client_account_code,
+                                                           instrument_name=neItems.symbol,
+                                                           symbol=neItems.instrument_type, expiry_date=neItems.expiry_date,
+                                                           strike_price=neItems.strike_price)
+            if neItems.client_account_code == "TRKKDC18":
+                print("TRKKDC18")
+
+            if onTransEObj.exists():
+                pass
+            else:
+                dictMonNumteachoName = {'01': 'Jan', '02': 'Feb', '03': 'Mar', '04': 'Apr', '05': 'May', '06': 'Jun',
+                                        '07': 'Jul', '08': 'Aug', '09': 'Sep', '10': 'Oct', '11': 'Nov', '12': 'Dec', }
+                initDate = str(neItems.expiry_date).split('-')
+
+                constrExpDate = initDate[2] + dictMonNumteachoName.get(initDate[1]) + initDate[0]
+                constSecurityId = str(self.pk) + str(neItems.option_type) + str(
+                    neItems.instrument_type) + constrExpDate + str(
+                    int(neItems.strike_price)) + str(clientItem.client_account_code)
+
+                constSecurityNo = 'CF ' + str(neItems.option_type) + ' ' + str(
+                    neItems.instrument_type) + ' ' + constrExpDate + ' ' + str(
+                    int(neItems.strike_price))
+                constSecurityName = eachSecItems.symbol
+                prodmastObj = ProductMCX.objects.filter(transaction=self.pk, symbol=eachSecItems.symbol,
+                                                        strike_price=eachSecItems.strike_price,
+                                                        instrument_name='OPTFUT')[0]
+
+
+
+                try:
+                    tradeHead = TradeDetail.objects.get(trade_security_id=constSecurityId,client=clientItem.client_account_code)
+                except:
+                    tradeHead = TradeDetail()
+                    tradeHead.trade_security_id = constSecurityId
+                    tradeHead.trade_security_no = constSecurityNo
+                    tradeHead.trade_security_name = constSecurityName
+                tradeHead.client = Client.objects.get(client_id=clientItem.client_account_code)
+                tradeHead.trade_security_type = Enumeration.objects.get(enum_id='OPTFUT')
+                tradeHead.transaction_id = self.pk
+                tradeHead.trade_exchange = self.exchange
+                tradeHead.symbol = eachSecItems.symbol
+                tradeHead.expiry_date = neItems.expiry_date
+                tradeHead.instrument_type = eachSecItems.symbol
+                tradeHead.trade_date = eachSecItems.activity_time
+                tradeHead.save()
+                tradeHead.refresh_from_db()
+
+                try:
+                    tdObj = PositionMCX.objects.get(transaction__transaction_id = self.pk,client_account_code=neItems.client_account_code,
+                                                 instrument_type=neItems.instrument_type, symbol='OPTFUT',
+                                                 expiry_date=neItems.expiry_date,
+                                                 strike_price=int(neItems.strike_price))
+                    tradeItems = TradeDetailItem()
+                    tradeItems.trade_security = tradeHead
+                    tradeItems.trade_sr = '2'
+                    tradeItems.trade_tr = 'TN'
+                    tradeItems.exchange = 'MCX'
+                    # tradeItems.trade_no = itemsObj.trade_id
+                    # tradeItems.order_trade_time = neItems.last_modified_date.time()
+                    # tradeItems.ctcl_id = itemsObj.order_no
+                    # tradeItems.user_id = itemsObj.user_id
+                    if tdObj.brought_forward_long_qty != 0:
+                        tradeItems.buy_sell_opt = 'B'
+                        trade_lot = int(prodmastObj.tradable_lot)
+                        trade_gen = int(prodmastObj.general_numerator / prodmastObj.general_denominator)
+                        tradeItems.quantity = itemsObj.trade_qty * int(prodmastObj.tradable_lot) * int(prodmastObj.general_numerator / prodmastObj.general_denominator)
+                        tradeItems.amount = tdObj.brought_forward_long_value
+                        tradeItems.rate = tradeItems.amount / tradeItems.quantity
+                    else:
+                        tradeItems.buy_sell_opt = 'S'
+                        trade_lot = int(prodmastObj.tradable_lot)
+                        trade_gen = int(prodmastObj.general_numerator / prodmastObj.general_denominator)
+                        tradeItems.quantity = itemsObj.trade_qty * int(prodmastObj.tradable_lot) * int(prodmastObj.general_numerator / prodmastObj.general_denominator)
+                        tradeItems.amount = tdObj.brought_forward_short_value
+                        tradeItems.rate = tradeItems.amount / tradeItems.quantity
+                    tradeItems.net_rate = tradeItems.rate
+                    tradeItems.save()
+                    tradeItems.refresh_from_db()
+
+                    trade_buy_qty = \
+                    TradeDetailItem.objects.filter(trade_security=tradeHead, trade_sr=2, buy_sell_opt='B').aggregate(
+                        buy_total=Coalesce(Sum('quantity'), 0))['buy_total']
+                    trade_sell_qty = \
+                    TradeDetailItem.objects.filter(trade_security=tradeHead, trade_sr=2, buy_sell_opt='S').aggregate(
+                        sell_total=Coalesce(Sum('quantity'), 0))['sell_total']
+                    day_cf_qty = trade_sell_qty - trade_buy_qty
+
+                    if day_cf_qty != 0:
+                        tradeItems = TradeDetailItem()
+                        tradeItems.trade_security = tradeHead
+                        tradeItems.trade_sr = '5'
+                        tradeItems.trade_tr = 'NA'
+                        tradeItems.exchange = 'MCX'
+                        tradeItems.expiry_date = neItems.expiry_date
+                        # tradeItems.trade_no = itemsObj.trade_id
+                        # tradeItems.order_trade_time = itemsObj.last_modified_date.time()
+                        # tradeItems.ctcl_id = itemsObj.order_no
+                        # tradeItems.user_id = itemsObj.user_id
+                        if day_cf_qty > 0:
+                            tradeItems.quantity = day_cf_qty  * (int(prodmastObj.tradable_lot) * int(prodmastObj.general_numerator))
+                            tradeItems.buy_sell_opt = 'S'
+                        if day_cf_qty < 0:
+                            tradeItems.quantity = (day_cf_qty  * (int(prodmastObj.tradable_lot) * int(prodmastObj.general_numerator))) * -1
+                            tradeItems.buy_sell_opt = 'B'
+
+                        tradeItems.rate = 0
+
+                        """Construct Brokerage Logics"""
+                        try:
+                            try:
+                                brokLogic = ClientBrokerage.objects.get(client=clientItem.client_account_code,
+                                                                        client_exchange=Exchange.objects.get(
+                                                                            exchange_id='MCX'),
+                                                                        from_date__lte=neItems.activity_time)
+                            except:
+                                try:
+                                    brokLogic = \
+                                    ClientBrokerageHistory.objects.filter(client=clientItem.client_account_code,
+                                                                          client_exchange=Exchange.objects.get(
+                                                                              exchange_id='MCX')).filter(
+                                        Q(from_date__lte=neItems.activity_time) & Q(
+                                            thru_date__gte=neItems.activity_time))[0]
+
+                                except:
+                                    brokLogic = ClientBrokerage.objects.filter(
+                                        client=clientItem.client_account_code,
+                                        client_exchange=Exchange.objects.get(
+                                            exchange_id='MCX'))[0]
+                            # percenLogic = brokLogic.brok_percent.brokerage_one_side_percent
+                            # minLogic = brokLogic.brok_percent.brokerage_one_side_min
+
+
+                            lot = trade_lot
+                            try:
+                                brok_obj = BrokerageMCXItem.objects.get(module=brokLogic.brok_percent_mcx,
+                                                                        derivative_symbol='EO')
+                            except:
+                                brok_obj = BrokerageMCXItem.objects.get(module=brokLogic.brok_percent_mcx,
+                                                                        derivative_symbol='EO')
+                            brok_perc = brok_obj.brokerage_one_side_percent
+                            brok_min = brok_obj.brokerage_one_side_min * (tradeItems.quantity/lot)
+                            brok_percentage = round((tradeItems.rate * brok_perc)/100,4)
+                            res_round_val = Decimal(brok_percentage).quantize(Decimal('1.000'),
+                                                                        rounding=ROUND_HALF_UP)
+
+                            brok_tot_perc = tradeItems.quantity * res_round_val
+                            if brok_tot_perc > brok_min:
+                                tradeItems.brokerage = brok_tot_perc
+                            if brok_min > brok_tot_perc:
+                                tradeItems.brokerage = brok_min
+                            tradeItems.brokerage_total = tradeItems.brokerage
+                            if tradeItems.buy_sell_opt == 'S':
+                                tradeItems.net_rate = tradeItems.rate + (tradeItems.brokerage/100)
+                            if tradeItems.buy_sell_opt == 'B':
+                                tradeItems.net_rate = tradeItems.rate + (tradeItems.brokerage/100)
+
+                        except:
+                            tradeItems.brokerage = 0
+                            tradeItems.brokerage_total = 0
+                            tradeItems.brokerage_logic = '2m'
+                            tradeItems.net_rate = tradeItems.rate
+
+                            try:
+                                clieBrokex = ClientBillWithoutBrokerage.objects.get(
+                                    client=Client.objects.get(client_id=clientItem.client_account_code))
+                                pass
+                            except:
+                                clieWOBrok = ClientBillWithoutBrokerage()
+                                clieWOBrok.transaction = self
+                                clieWOBrok.client = Client.objects.get(client_id=clientItem.client_account_code)
+                                clieWOBrok.save()
+                                clieWOBrok.refresh_from_db()
+
+                        tradeItems.amount = round(tradeItems.quantity * tradeItems.net_rate, 2)
+                        tradeItems.pre_brok_amount = tradeItems.quantity * tradeItems.rate
+                        sttCharge = 0
+                        sdCharge = 0
+                        if tradeItems.buy_sell_opt == 'S':
+                            try:
+                                stt_charge = SecurityTransactionTax.objects.filter(status='Active',
+                                                                                   market_type=self.exchange)[0]
+                                sttCharge = tradeItems.pre_brok_amount * (stt_charge.option_ctt_charge / 100)
+                            except:
+                                sttCharge = 0
+                        elif tradeItems.buy_sell_opt == 'B':
+                            try:
+                                sd_charge = StampDuty.objects.get(status='Active')
+                                sdCharge = tradeItems.pre_brok_amount * (sd_charge.options_charge / 100)
+                            except:
+                                sdCharge = 0
+                        else:
+                            sttCharge = 0
+                            sdCharge = 0
+                        try:
+                            try:
+                                turnover_charge = Turnover.objects.filter(status='Active', market_type=self.exchange,
+                                                                          scrip_group=prodmastObj.symbol)[0]
+                            except:
+                                turnover_charge = \
+                                Turnover.objects.filter(status='Active', market_type=self.exchange, scrip_group='Main')[
+                                    0]
+                            turnCharge = tradeItems.pre_brok_amount * (turnover_charge.turn_over_charge / 100)
+                        except:
+                            turnCharge = 0
+                        try:
+                            stax_charge = ServiceCharge.objects.filter(status='Active')[0]
+                            staxCharge = (tradeItems.brokerage_total + turnCharge) * (stax_charge.rate / 100)
+                        except:
+                            staxCharge = 0
+                        try:
+                            gstin_charge = GSTIN.objects.filter(status='Active')[0]
+                            gstin = tradeItems.pre_brok_amount * (stax_charge.igst / 100)
+                        except:
+                            gstin = 0
+                        try:
+                            sebi_charge = Sebi.objects.filter(status='Active')[0]
+                            sebiCharge = tradeItems.pre_brok_amount * (sebi_charge.sebi_charge / 100)
+                        except:
+                            sebiCharge = 0
+
+                        tradeItems.turnover = turnCharge
+                        tradeItems.stt = sttCharge
+                        tradeItems.service_tax = staxCharge
+                        tradeItems.sebi = sebiCharge
+                        tradeItems.stamp_duty = sdCharge
+                        tradeItems.brok_amount = tradeItems.quantity * tradeItems.brokerage
+                        tradeItems.save()
+                        tradeItems.refresh_from_db()
+
+
+                except:
+                    pass
+
+        """Process OPTCOM not exists logics"""
+        procObjNEIDX = PositionMCX.objects.filter(transaction=self.pk, symbol='OPTCOM',
+                                                  expiry_date=tradeObjIDX.activity_time)
+        for neItems in procObjNEIDX:
+
+            onTransEObj = OnlineTransactionMCX.objects.filter(transaction=self.pk,
+                                                              account_id=neItems.client_account_code,
+                                                              instrument_name=neItems.instrument_type,
+                                                              symbol=neItems.symbol, expiry_date=neItems.expiry_date,
+                                                              strike_price=neItems.strike_price)
+            if neItems.client_account_code == "TRKKDC18":
+                print("TRKKDC18")
+            if onTransEObj.exists():
+                pass
+            else:
+                dictMonNumteachoName = {'01': 'Jan', '02': 'Feb', '03': 'Mar', '04': 'Apr', '05': 'May', '06': 'Jun',
+                                        '07': 'Jul', '08': 'Aug', '09': 'Sep', '10': 'Oct', '11': 'Nov', '12': 'Dec', }
+                initDate = str(neItems.expiry_date).split('-')
+
+                constrExpDate = initDate[2] + dictMonNumteachoName.get(initDate[1]) + initDate[0]
+                constSecurityId = str(self.pk) + str(neItems.option_type) + str(
+                    neItems.instrument_type) + constrExpDate + str(
+                    int(neItems.strike_price)) + str(clientItem.client_account_code)
+
+                constSecurityNo = 'CF ' + str(neItems.option_type) + ' ' + str(
+                    neItems.instrument_type) + ' ' + constrExpDate + ' ' + str(
+                    int(neItems.strike_price))
+                constSecurityName = eachSecItems.symbol
+                prodmastObj = ProductMCX.objects.filter(transaction=self.pk, symbol=neItems.instrument_type,
+                                                        strike_price=neItems.strike_price,
+                                                        instrument_name='OPTCOM')[0]
+
+                if constSecurityId == "M23112022COPPER30Dec20220KA0099":
+                    print("Inside EO CE ADANIENT 30Apr2020 185")
+
+                try:
+                    tradeHead = TradeDetail.objects.get(trade_security_id=constSecurityId,
+                                                        client=clientItem.client_account_code)
+                except:
+                    tradeHead = TradeDetail()
+                    tradeHead.trade_security_id = constSecurityId
+                    tradeHead.trade_security_no = constSecurityNo
+                    tradeHead.trade_security_name = constSecurityName
+                tradeHead.client = Client.objects.get(client_id=clientItem.client_account_code)
+                tradeHead.trade_security_type = Enumeration.objects.get(enum_id='OPTCOM')
+                tradeHead.transaction_id = self.pk
+                tradeHead.trade_exchange = self.exchange
+                tradeHead.symbol = eachSecItems.symbol
+                tradeHead.instrument_type = eachSecItems.symbol
+                tradeHead.trade_date = eachSecItems.activity_time
+                tradeHead.expiry_date = neItems.expiry_date
+                tradeHead.save()
+                tradeHead.refresh_from_db()
+
+                try:
+                    tdObj = PositionMCX.objects.get(transaction__transaction_id=self.pk,
+                                                    client_account_code=neItems.client_account_code,
+                                                    instrument_type=neItems.instrument_type, symbol='OPTCOM',
+                                                    expiry_date=neItems.expiry_date,
+                                                    strike_price=int(neItems.strike_price))
+                    tradeItems = TradeDetailItem()
+                    tradeItems.trade_security = tradeHead
+                    tradeItems.trade_sr = '2'
+                    tradeItems.trade_tr = 'TN'
+                    tradeItems.exchange = 'MCX'
+                    # tradeItems.trade_no = itemsObj.trade_id
+                    # tradeItems.order_trade_time = neItems.last_modified_date.time()
+                    # tradeItems.ctcl_id = itemsObj.order_no
+                    # tradeItems.user_id = itemsObj.user_id
+                    if tdObj.brought_forward_long_qty != 0:
+                        tradeItems.buy_sell_opt = 'B'
+                        trade_lot = int(prodmastObj.tradable_lot)
+                        trade_gen = int(prodmastObj.general_numerator / prodmastObj.general_denominator)
+                        tradeItems.quantity = itemsObj.trade_qty * int(prodmastObj.tradable_lot) * int(
+                            prodmastObj.general_numerator / prodmastObj.general_denominator)
+                        tradeItems.amount = tdObj.brought_forward_long_value
+                        tradeItems.rate = tradeItems.amount / tradeItems.quantity
+                    else:
+                        tradeItems.buy_sell_opt = 'S'
+                        trade_lot = int(prodmastObj.tradable_lot)
+                        trade_gen = int(prodmastObj.general_numerator / prodmastObj.general_denominator)
+                        tradeItems.quantity = itemsObj.trade_qty * int(prodmastObj.tradable_lot) * int(
+                            prodmastObj.general_numerator / prodmastObj.general_denominator)
+                        tradeItems.amount = tdObj.brought_forward_short_value
+                        tradeItems.rate = tradeItems.amount / tradeItems.quantity
+                    tradeItems.net_rate = tradeItems.rate
+                    tradeItems.save()
+                    tradeItems.refresh_from_db()
+
+                    trade_buy_qty = \
+                        TradeDetailItem.objects.filter(trade_security=tradeHead, trade_sr=2,
+                                                       buy_sell_opt='B').aggregate(
+                            buy_total=Coalesce(Sum('quantity'), 0))['buy_total']
+                    trade_sell_qty = \
+                        TradeDetailItem.objects.filter(trade_security=tradeHead, trade_sr=2,
+                                                       buy_sell_opt='S').aggregate(
+                            sell_total=Coalesce(Sum('quantity'), 0))['sell_total']
+                    day_cf_qty = trade_sell_qty - trade_buy_qty
+
+                    if day_cf_qty != 0:
+                        tradeItems = TradeDetailItem()
+                        tradeItems.trade_security = tradeHead
+                        tradeItems.trade_sr = '5'
+                        tradeItems.trade_tr = 'NA'
+                        tradeItems.exchange = 'MCX'
+                        tradeItems.expiry_date = neItems.expiry_date
+                        # tradeItems.trade_no = itemsObj.trade_id
+                        # tradeItems.order_trade_time = itemsObj.last_modified_date.time()
+                        # tradeItems.ctcl_id = itemsObj.order_no
+                        # tradeItems.user_id = itemsObj.user_id
+                        if day_cf_qty > 0:
+                            tradeItems.quantity = day_cf_qty * (
+                                        int(prodmastObj.tradable_lot) * int(prodmastObj.general_numerator))
+                            tradeItems.buy_sell_opt = 'S'
+                        if day_cf_qty < 0:
+                            tradeItems.quantity = (day_cf_qty * (
+                                        int(prodmastObj.tradable_lot) * int(prodmastObj.general_numerator))) * -1
+                            tradeItems.buy_sell_opt = 'B'
+
+                        tradeItems.rate = 0
+
+                        """Construct Brokerage Logics"""
+                        try:
+                            try:
+                                brokLogic = ClientBrokerage.objects.get(client=neItems.client_account_code,
+                                                                        client_exchange=Exchange.objects.get(
+                                                                            exchange_id='MCX'),
+                                                                        from_date__lte=neItems.activity_time)
+                            except:
+                                try:
+                                    brokLogic = \
+                                        ClientBrokerageHistory.objects.filter(client=neItems.client_account_code,
+                                                                              client_exchange=Exchange.objects.get(
+                                                                                  exchange_id='MCX')).filter(
+                                            Q(from_date__lte=neItems.activity_time) & Q(
+                                                thru_date__gte=neItems.activity_time))[0]
+
+                                except:
+                                    brokLogic = ClientBrokerage.objects.filter(
+                                        client=neItems.client_account_code,
+                                        client_exchange=Exchange.objects.get(
+                                            exchange_id='MCX'))[0]
+
+
+                            lot = trade_lot
+                            try:
+                                brok_obj = BrokerageMCXItem.objects.get(module=brokLogic.brok_percent_mcx,
+                                                                        derivative_symbol='EO')
+                            except:
+                                brok_obj = BrokerageMCXItem.objects.get(module=brokLogic.brok_percent_mcx,
+                                                                        derivative_symbol='EO')
+                            brok_perc = brok_obj.brokerage_one_side_percent
+                            brok_min = brok_obj.brokerage_one_side_min * (tradeItems.quantity/lot)
+                            brok_percentage = round((tradeItems.rate * brok_perc)/100,4)
+                            res_round_val = Decimal(brok_percentage).quantize(Decimal('1.000'),
+                                                                        rounding=ROUND_HALF_UP)
+
+                            brok_tot_perc = tradeItems.quantity * res_round_val
+                            if brok_tot_perc > brok_min:
+                                tradeItems.brokerage = brok_tot_perc
+                            if brok_min > brok_tot_perc:
+                                tradeItems.brokerage = brok_min
+                            tradeItems.brokerage_total = tradeItems.brokerage
+                            if tradeItems.buy_sell_opt == 'S':
+                                tradeItems.net_rate = tradeItems.rate + (tradeItems.brokerage/100)
+                            if tradeItems.buy_sell_opt == 'B':
+                                tradeItems.net_rate = tradeItems.rate + (tradeItems.brokerage/100)
+
+                        except:
+                            tradeItems.brokerage = 0
+                            tradeItems.brokerage_total = 0
+                            tradeItems.brokerage_logic = '2m'
+                            tradeItems.net_rate = tradeItems.rate
+
+                            try:
+                                clieBrokex = ClientBillWithoutBrokerage.objects.get(
+                                    client=Client.objects.get(client_id=neItems.client_account_code))
+                                pass
+                            except:
+                                clieWOBrok = ClientBillWithoutBrokerage()
+                                clieWOBrok.transaction = self
+                                clieWOBrok.client = Client.objects.get(client_id=neItems.client_account_code)
+                                clieWOBrok.save()
+                                clieWOBrok.refresh_from_db()
+
+                        tradeItems.amount = round(tradeItems.quantity * tradeItems.net_rate, 2)
+                        tradeItems.pre_brok_amount = tradeItems.quantity * tradeItems.rate
+                        sttCharge = 0
+                        sdCharge = 0
+                        if tradeItems.buy_sell_opt == 'S':
+                            try:
+                                stt_charge = SecurityTransactionTax.objects.filter(status='Active',
+                                                                                   market_type=self.exchange)[0]
+                                sttCharge = tradeItems.pre_brok_amount * (stt_charge.option_ctt_charge / 100)
+                            except:
+                                sttCharge = 0
+                        elif tradeItems.buy_sell_opt == 'B':
+                            try:
+                                sd_charge = StampDuty.objects.get(status='Active')
+                                sdCharge = tradeItems.pre_brok_amount * (sd_charge.options_charge / 100)
+                            except:
+                                sdCharge = 0
+                        else:
+                            sttCharge = 0
+                            sdCharge = 0
+                        try:
+                            try:
+                                turnover_charge = Turnover.objects.filter(status='Active', market_type=self.exchange,
+                                                                          scrip_group=prodmastObj.symbol)[0]
+                            except:
+                                turnover_charge = \
+                                Turnover.objects.filter(status='Active', market_type=self.exchange, scrip_group='Main')[
+                                    0]
+                            turnCharge = tradeItems.pre_brok_amount * (turnover_charge.turn_over_charge / 100)
+                        except:
+                            turnCharge = 0
+                        try:
+                            stax_charge = ServiceCharge.objects.filter(status='Active')[0]
+                            staxCharge = (tradeItems.brokerage_total + turnCharge) * (stax_charge.rate / 100)
+                        except:
+                            staxCharge = 0
+                        try:
+                            gstin_charge = GSTIN.objects.filter(status='Active')[0]
+                            gstin = tradeItems.pre_brok_amount * (stax_charge.igst / 100)
+                        except:
+                            gstin = 0
+                        try:
+                            sebi_charge = Sebi.objects.filter(status='Active')[0]
+                            sebiCharge = tradeItems.pre_brok_amount * (sebi_charge.sebi_charge / 100)
+                        except:
+                            sebiCharge = 0
+
+                        tradeItems.turnover = turnCharge
+                        tradeItems.stt = sttCharge
+                        tradeItems.service_tax = staxCharge
+                        tradeItems.sebi = sebiCharge
+                        tradeItems.stamp_duty = sdCharge
+                        tradeItems.brok_amount = tradeItems.quantity * tradeItems.brokerage
+                        tradeItems.save()
+                        tradeItems.refresh_from_db()
+
+
+                except:
+                    pass
+
+        """Process FUTCOM trade data"""
+
+        procObjIDX = PositionMCX.objects.filter(transaction=self.pk, symbol='FUTCOM',position_date=tradeObjIDX.activity_time)
+        procClientObjIDX = procObjIDX.distinct('client_account_code')
+
+        for clientItem in procClientObjIDX:
+            trdObjIDX = OnlineTransactionMCX.objects.filter(transaction=self.pk,account_id=clientItem.client_account_code, instrument_name='FUTCOM')
+
+            if clientItem.client_account_code == "TRKKDC18":
+                print("TRKKDC18")
+
+            trdSecObjIDX = trdObjIDX.distinct('symbol')
+            for secItem in trdSecObjIDX:
+
+                eachSecItemsObj = trdObjIDX.filter(symbol=secItem.symbol)
+                eachSecItemsExpObj = eachSecItemsObj.distinct('expiry_date')
+                for secItemExp in eachSecItemsExpObj:
+                    eachSecItemsExpDateObj = eachSecItemsObj.filter(expiry_date = secItemExp.expiry_date)
+                    eachSecItems = eachSecItemsExpDateObj[0]
+                    dictMonNumteachoName = {'01': 'Jan', '02': 'Feb', '03': 'Mar', '04': 'Apr', '05': 'May', '06': 'Jun',
+                                            '07': 'Jul', '08': 'Aug', '09': 'Sep', '10': 'Oct', '11': 'Nov', '12': 'Dec', }
+                    initDate = str(eachSecItems.expiry_date).split('-')
+
+                    constrExpDate = initDate[2] + dictMonNumteachoName.get(initDate[1]) + initDate[0]
+                    constrExpDateUp = initDate[2] + dictMonNumteachoName.get(initDate[1]).upper() + initDate[0]
+
+                    constSecurityId = str(self.pk) + str(eachSecItems.symbol) + constrExpDate + str(
+                        eachSecItems.strike_price) + str(clientItem.client_account_code)
+                    constSecurityNo = 'CF '+ str(eachSecItems.symbol) + ' ' + constrExpDate
+                    constSecurityName = eachSecItems.symbol
+                    if constSecurityId == "M16122022COPPER30Dec20220TNCKN15":
+                        print("Inside EO CE ADANIENT 30Apr2020 185")
+
+                    prodmastObj1 = \
+                    ProductMCX.objects.filter(transaction__transaction_id=self.pk, symbol=eachSecItems.symbol,
+                                              expiry_date=constrExpDateUp,
+                                              instrument_name='FUTCOM')
+                    if prodmastObj1.exists():
+                        prodmastObj = prodmastObj1[0]
+                        trade_lot = int(prodmastObj.tradable_lot)
+                        trade_gen = int(
+                            prodmastObj.tradable_lot * (prodmastObj.general_numerator / prodmastObj.general_denominator))
+                    else:
+                        try:
+                            prodmastObj = ProductMCX.objects.filter(transaction__transaction_id=self.pk, symbol=eachSecItems.symbol, instrument_name='FUTCOM')[0]
+                        except:
+                            prodmastObj = \
+                            ProductMCX.objects.filter(symbol=eachSecItems.symbol,expiry_date=constrExpDateUp,
+                                                      instrument_name='FUTCOM').order_by('-created_date')[0]
+                        trade_lot = int(prodmastObj.tradable_lot)
+                        trade_gen = int(
+                            prodmastObj.tradable_lot * (
+                                        prodmastObj.general_numerator / prodmastObj.general_denominator))
+                    if constSecurityNo == "CF CRUDEOIL 19Apr2021":
+                        print("CF ALUMINI 30Apr2020")
+
+                    try:
+                        tradeHead = TradeDetail.objects.get(trade_security_id=constSecurityId,
+                                                            client=clientItem.client_account_code)
+                    except:
+                        tradeHead = TradeDetail()
+                        tradeHead.trade_security_id = constSecurityId
+                        tradeHead.trade_security_no = constSecurityNo
+                        tradeHead.trade_security_name = constSecurityName
+                    try:
+                        tradeHead.client = Client.objects.get(client_id=clientItem.client_account_code)
+                    except:
+                        pass
+                    tradeHead.trade_security_type = Enumeration.objects.get(enum_id='FUTCOM')
+                    tradeHead.transaction_id = self.pk
+                    tradeHead.trade_exchange = self.exchange
+                    tradeHead.symbol = eachSecItems.symbol
+                    tradeHead.instrument_type = eachSecItems.symbol
+                    tradeHead.trade_date = eachSecItems.activity_time
+                    tradeHead.expiry_date = eachSecItems.expiry_date
+                    tradeHead.save()
+                    tradeHead.refresh_from_db()
+
+                    """Construct BF qty and value"""
+                    try:
+                        bfObj = PositionMCX.objects.get(transaction__transaction_id = self.pk,client_account_code=clientItem.client_account_code,instrument_type=eachSecItems.symbol,symbol='FUTCOM',expiry_date=eachSecItems.expiry_date)
+                        tradeItems = TradeDetailItem()
+                        tradeItems.trade_security = tradeHead
+                        tradeItems.trade_sr = '1'
+                        tradeItems.trade_tr = 'C'
+                        tradeItems.exchange = 'MCX'
+                        tradeItems.brokerage = 0
+                        tradeItems.brokerage_logic = '2m'
+
+                        if bfObj.brought_forward_long_qty != 0:
+                            # trade_lot = int(prodmastObj.tradable_lot)
+                            trade_gen = int(prodmastObj.tradable_lot * (prodmastObj.general_numerator / prodmastObj.general_denominator))
+                            tradeItems.quantity = bfObj.brought_forward_long_qty * trade_gen
+                            tradeItems.rate = (bfObj.brought_forward_long_value/tradeItems.quantity)
+                            tradeItems.buy_sell_opt = 'B'
+                        else:
+                            # trade_lot = int(prodmastObj.tradable_lot)
+                            trade_gen = int(prodmastObj.tradable_lot * (prodmastObj.general_numerator / prodmastObj.general_denominator))
+                            tradeItems.quantity = (bfObj.brought_forward_short_qty * trade_gen) * -1
+                            tradeItems.rate = (bfObj.brought_forward_short_value/tradeItems.quantity)
+                            tradeItems.buy_sell_opt = 'S'
+
+                        tradeItems.trade_no = 'C' + str(int(tradeItems.rate * 10000))
+                        tradeItems.net_rate = tradeItems.rate
+                        tradeItems.amount = tradeItems.quantity * tradeItems.net_rate
+                        tradeItems.pre_brok_amount = tradeItems.quantity * tradeItems.rate
+                        tradeItems.save()
+                        tradeItems.refresh_from_db()
+                    except:
+                        pass
+
+
+
+                    for itemsObj in eachSecItemsExpDateObj:
+                        tradeItems = TradeDetailItem()
+                        tradeItems.trade_security = tradeHead
+                        tradeItems.trade_sr = '2'
+                        tradeItems.trade_tr = 'TN'
+                        tradeItems.exchange = 'MCX'
+                        tradeItems.trade_no = itemsObj.trade_id
+                        # tradeItems.order_trade_time = itemsObj.last_modified_date.time()
+                        tradeItems.ctcl_id = itemsObj.order_no
+                        tradeItems.user_id = itemsObj.user_id
+                        if itemsObj.buy_sell_ind_id == 1:
+                            tradeItems.buy_sell_opt = 'B'
+                        if itemsObj.buy_sell_ind_id == 2:
+                            tradeItems.buy_sell_opt = 'S'
+                        trade_lot = int(prodmastObj.tradable_lot)
+                        trade_gen = int(prodmastObj.tradable_lot * (prodmastObj.general_numerator / prodmastObj.general_denominator))
+                        tradeItems.quantity = itemsObj.trade_qty * trade_gen
+                        tradeItems.rate = itemsObj.trade_price
+
+                        """Construct Brokerage Logics"""
+                        try:
+                            try:
+                                brokLogic = ClientBrokerage.objects.get(client=clientItem.client_account_code,
+                                                                        client_exchange=Exchange.objects.get(
+                                                                            exchange_id='MCX'),
+                                                                        from_date__lte=eachSecItems.activity_time)
+                            except:
+                                try:
+                                    brokLogic = \
+                                        ClientBrokerageHistory.objects.filter(client=clientItem.client_account_code,
+                                                                              client_exchange=Exchange.objects.get(
+                                                                                  exchange_id='MCX')).filter(
+                                            Q(from_date__lte=eachSecItems.activity_time) & Q(
+                                                thru_date__gte=eachSecItems.activity_time))[0]
+
+                                except:
+                                    brokLogic = ClientBrokerage.objects.filter(
+                                        client=clientItem.client_account_code,
+                                        client_exchange=Exchange.objects.get(
+                                            exchange_id='MCX'))[0]
+                            # percenLogic = brokLogic.brok_percent.brokerage_one_side_percent
+                            # minLogic = brokLogic.brok_percent.brokerage_one_side_min
+
+                            lot = trade_lot
+                            try:
+                                brok_obj = BrokerageMCXItem.objects.get(module=brokLogic.brok_percent_mcx,
+                                                                    product=prodmastObj.symbol)
+                            except Exception as e:
+                                try:
+                                    brok_obj = BrokerageMCXItem.objects.get(module=brokLogic.brok_percent_mcx,
+                                                                            product__exact='')
+                                except Exception as e:
+                                    brok_obj = BrokerageMCXItem.objects.get(module=brokLogic.brok_percent_mcx,
+                                                                            product='NULL',derivative_symbol=Enumeration.objects.get(enum_id="EF"))
+
+                            brok_perc = brok_obj.brokerage_one_side_percent
+                            brok_min = brok_obj.brokerage_one_side_min * tradeItems.quantity
+
+                            brok_percentage = round((tradeItems.rate * brok_perc)/100,4)
+                            res_round_val = Decimal(brok_percentage).quantize(Decimal('1.000'),
+                                                                        rounding=ROUND_HALF_UP)
+
+                            brok_tot_perc = tradeItems.quantity * res_round_val
+                            if brok_tot_perc > brok_min:
+                                tradeItems.brokerage = brok_tot_perc
+                            if brok_min > brok_tot_perc:
+                                tradeItems.brokerage = brok_min
+                            tradeItems.brokerage_total = tradeItems.brokerage
+                            if tradeItems.buy_sell_opt == 'S':
+                                tradeItems.net_rate = tradeItems.rate + (tradeItems.brokerage/100)
+                            if tradeItems.buy_sell_opt == 'B':
+                                tradeItems.net_rate = tradeItems.rate + (tradeItems.brokerage/100)
+
+                        except:
+                            tradeItems.brokerage = 0
+                            tradeItems.brokerage_total = 0
+                            tradeItems.brokerage_logic = '2m'
+                            tradeItems.net_rate = tradeItems.rate
+
+                            try:
+                                clieBrokex = ClientBillWithoutBrokerage.objects.get(
+                                    client=Client.objects.get(client_id=clientItem.client_account_code))
+                                pass
+                            except:
+                                clieWOBrok = ClientBillWithoutBrokerage()
+                                clieWOBrok.transaction = self
+                                clieWOBrok.client = Client.objects.get(client_id=clientItem.client_account_code)
+                                clieWOBrok.save()
+                                clieWOBrok.refresh_from_db()
+
+                        tradeItems.amount = round(tradeItems.quantity * tradeItems.net_rate, 2)
+                        tradeItems.pre_brok_amount = tradeItems.quantity * tradeItems.rate
+                        sttCharge = 0
+                        sdCharge = 0
+                        if tradeItems.buy_sell_opt == 'S':
+                            try:
+                                stt_charge = SecurityTransactionTax.objects.filter(status='Active',
+                                                                                   market_type=self.exchange)[0]
+                                sttCharge = tradeItems.pre_brok_amount * (stt_charge.future_ctt_charge / 100)
+                            except:
+                                sttCharge = 0
+                        elif tradeItems.buy_sell_opt == 'B':
+                            try:
+                                sd_charge = StampDuty.objects.get(status='Active')
+                                sdCharge = tradeItems.pre_brok_amount * (sd_charge.futures_charge / 100)
+                            except:
+                                sdCharge = 0
+                        else:
+                            sttCharge = 0
+                            sdCharge = 0
+                        try:
+                            try:
+                                turnover_charge = Turnover.objects.filter(status='Active', market_type=self.exchange,
+                                                                          scrip_group=prodmastObj.symbol)[0]
+                            except:
+                                turnover_charge = \
+                                Turnover.objects.filter(status='Active', market_type=self.exchange, scrip_group='Main')[
+                                    0]
+                            turnCharge = tradeItems.pre_brok_amount * (turnover_charge.turn_over_charge / 100)
+                        except:
+                            turnCharge = 0
+
+                        try:
+                            clear_charge = ClearingCharges.objects.filter(status='Active')[0]
+                            clearCharge = tradeItems.pre_brok_amount * (clear_charge.mcx_futures / 100)
+                        except:
+                            clearCharge = 0
+
+                        try:
+                            gstin_charge = GSTIN.objects.filter(status='Active')[0]
+                            gstin = tradeItems.pre_brok_amount * (stax_charge.igst / 100)
+                        except:
+                            gstin = 0
+                        try:
+                            sebi_charge = Sebi.objects.filter(status='Active')[0]
+                            sebiCharge = tradeItems.pre_brok_amount * (sebi_charge.sebi_charge / 100)
+                        except:
+                            sebiCharge = 0
+
+                        try:
+                            stax_charge = ServiceCharge.objects.filter(status='Active')[0]
+                            staxCharge = (tradeItems.brokerage_total + turnCharge + sebiCharge) * (stax_charge.rate / 100)
+                        except:
+                            staxCharge = 0
+
+                        tradeItems.turnover = turnCharge
+                        tradeItems.stt = sttCharge
+                        tradeItems.service_tax = staxCharge
+                        tradeItems.sebi = sebiCharge
+                        tradeItems.stamp_duty = sdCharge
+                        tradeItems.clear_charge = clearCharge
+                        tradeItems.brok_amount = tradeItems.quantity * tradeItems.brokerage
+                        tradeItems.save()
+                        tradeItems.refresh_from_db()
+
+                    # if constSecurityNo== "IF BANKNIFTY 30Apr2020":
+                    #     print("IF BANKNIFTY 30Apr2020")
+                    """Construct CF qty"""
+
+                    tdObj = TradeDetailItem.objects.filter(trade_security = tradeHead)
+                    try:
+                        bftdObj = TradeDetailItem.objects.get(trade_security = tradeHead,trade_sr=1)
+
+                    except:
+                        bftdObj = None
+
+                    sell_qty = tdObj.filter(buy_sell_opt='S').aggregate(sell=Sum(Abs('quantity')))['sell']
+                    buy_qty = tdObj.filter(buy_sell_opt='B').aggregate(buy=Sum(Abs('quantity')))['buy']
+
+                    if sell_qty is None:
+                        sell_qty = 0
+
+                    if buy_qty is None:
+                        buy_qty = 0
+
+                    diff_qty = sell_qty - buy_qty
+
+                    if bftdObj is not None:
+                        pos = "B" if bftdObj.buy_sell_opt == "S" else "S"
+                    else:
+                        pos = "N"
+
+                    if diff_qty < 0:
+                        diff_qty = diff_qty * -1
+
+                    if constSecurityId == "M24012022ALUMINIUM28Feb20220HORBDR10":
+                        print("01042020BCOPPER30Apr20200CR00185")
+
+                    if diff_qty > 0:
+                        tradeItems = TradeDetailItem()
+                        tradeItems.trade_security = tradeHead
+                        tradeItems.trade_sr = '9999'
+                        tradeItems.trade_tr = pos
+                        tradeItems.exchange = 'MCX'
+
+                        tradeItems.brokerage = 0
+                        tradeItems.buy_sell_opt = pos
+                        tradeItems.brokerage_logic = '2m'
+                        tradeItems.quantity = diff_qty
+                        try:
+                            # cn_rate = PositionMCX.objects.filter(transaction__transaction_id=self.pk,
+                            #                                      symbol=secItemExp.instrument_name,
+                            #                                      instrument_type=secItemExp.symbol,
+                            #                                      expiry_date=secItemExp.expiry_date)[0]
+
+                            cn_rate = ContractPriceMCX.objects.filter(transaction__transaction_id=self.pk,
+                                                                 instrument_type=secItemExp.instrument_name,
+                                                                 symbol=secItemExp.symbol,
+                                                                 expiry_date=secItemExp.expiry_date)[0]
+                            tradeItems.rate = cn_rate.contract_close_price
+                            tradeItems.net_rate = tradeItems.rate
+                        except Exception as e:
+                            tradeItems.rate = 0
+                            tradeItems.net_rate = 0
+                        tradeItems.amount = tradeItems.quantity * tradeItems.rate
+                        tradeItems.trade_no = pos + str(int(tradeItems.rate * 10000))
+                        tradeItems.pre_brok_amount = tradeItems.quantity * tradeItems.rate
+                        tradeItems.save()
+                        tradeItems.refresh_from_db()
+
+
+
+
+            # else:
+            #     pass
+
+        """Process FUTCOM not exists logics"""
+        procObjNEIDX = PositionMCX.objects.filter(transaction=self.pk, symbol='FUTCOM',position_date=tradeObjIDX.activity_time)
+        for neItems in procObjNEIDX:
+            # print(str(int(neItems.strike_price)))
+
+            onTransEObj = OnlineTransactionMCX.objects.filter(transaction=self.pk,account_id=neItems.client_account_code,instrument_name=neItems.symbol,symbol=neItems.instrument_type,expiry_date=neItems.expiry_date)
+            if neItems.client_account_code == "TRKKDC18":
+                print("TRKKDC18")
+            if onTransEObj.exists():
+                pass
+            else:
+                dictMonNumteachoName = {'01': 'Jan', '02': 'Feb', '03': 'Mar', '04': 'Apr', '05': 'May', '06': 'Jun',
+                                        '07': 'Jul', '08': 'Aug', '09': 'Sep', '10': 'Oct', '11': 'Nov', '12': 'Dec', }
+                initDate = str(neItems.expiry_date).split('-')
+                constrExpDate = initDate[2] + dictMonNumteachoName.get(initDate[1]) + initDate[0]
+                constrExpDateUp = initDate[2] +dictMonNumteachoName.get(initDate[1]).upper() +initDate[0]
+                constSecurityId = str(self.pk) + str(neItems.instrument_type) + constrExpDate + str(
+                    int(neItems.strike_price)) + str(neItems.client_account_code)
+                constSecurityNo = 'CF ' + str(neItems.instrument_type) + ' ' + constrExpDate
+                constSecurityName = neItems.instrument_type
+
+                if constSecurityId == "M23112022COPPER30Dec20220KA0099":
+                    print("Inside EO CE ADANIENT 30Apr2020 185")
+
+                prodmastObj01 = ProductMCX.objects.filter(transaction__transaction_id=self.pk, symbol=neItems.instrument_type,
+                                                        expiry_date=constrExpDateUp,
+                                                        instrument_name='FUTCOM')
+                if prodmastObj01.exists():
+                    prodmastObj = prodmastObj01[0]
+                    trade_lot = int(prodmastObj.tradable_lot)
+                    trade_gen = int(
+                        prodmastObj.tradable_lot * (prodmastObj.general_numerator / prodmastObj.general_denominator))
+                else:
+                    try:
+                        prodmastObj = \
+                        ProductMCX.objects.filter(transaction__transaction_id=self.pk,  symbol=neItems.instrument_type,
+                                                  instrument_name='FUTCOM')[0]
+                    except:
+                        prodmastObj = \
+                            ProductMCX.objects.filter( symbol=neItems.instrument_type, expiry_date=constrExpDateUp,
+                                                      instrument_name='FUTCOM').order_by('-created_date')[0]
+                    trade_lot = int(prodmastObj.tradable_lot)
+                    trade_gen = int(
+                            prodmastObj.tradable_lot * (
+                                        prodmastObj.general_numerator / prodmastObj.general_denominator))
+                # prodmastObj = ProductMCX.objects.filter(transaction__transaction_id='01042020B', symbol='COPPER',
+                #                                         expiry_date=constrExpDateUp,
+                #                                         instrument_name='FUTCOM')
+                # if constSecurityId == '17062020ACOPPER30Jun20200CR00185':
+                #     print("17062020ACOPPER30Jun20200CR00185")
+
+                try:
+                    tradeHead = TradeDetail.objects.get(trade_security_id=constSecurityId,
+                                                        client=neItems.client_account_code)
+                except:
+                    tradeHead = TradeDetail()
+                    tradeHead.trade_security_id = constSecurityId
+                    tradeHead.trade_security_no = constSecurityNo
+                    tradeHead.trade_security_name = constSecurityName
+                tradeHead.client = Client.objects.get(client_id=neItems.client_account_code)
+                tradeHead.trade_security_type = Enumeration.objects.get(enum_id='FUTCOM')
+                tradeHead.transaction_id = self.pk
+                tradeHead.trade_exchange = self.exchange
+                tradeHead.symbol = neItems.instrument_type
+                tradeHead.instrument_type = neItems.instrument_type
+                tradeHead.expiry_date = neItems.expiry_date
+                tradeHead.trade_date = neItems.position_date
+                tradeHead.save()
+                tradeHead.refresh_from_db()
+
+
+
+                """Construct BF qty and value"""
+                try:
+                    bfObj = PositionMCX.objects.get(transaction__transaction_id = self.pk,client_account_code=neItems.client_account_code,
+                                                 instrument_type=neItems.instrument_type, symbol='FUTCOM',
+                                                 expiry_date=neItems.expiry_date)
+                    tradeItems = TradeDetailItem()
+                    tradeItems.trade_security = tradeHead
+                    tradeItems.trade_sr = '1'
+                    tradeItems.trade_tr = 'C'
+                    tradeItems.exchange = 'MCX'
+                    tradeItems.brokerage = 0
+                    tradeItems.brokerage_logic = '2m'
+
+                    if bfObj.brought_forward_long_qty != 0:
+                        # trade_lot = int(prodmastObj.tradable_lot)
+                        # trade_gen = int(prodmastObj.tradable_lot * (prodmastObj.general_numerator / prodmastObj.general_denominator))
+                        tradeItems.quantity = bfObj.brought_forward_long_qty * trade_gen
+                        tradeItems.rate = (bfObj.brought_forward_long_value / tradeItems.quantity)
+                        tradeItems.buy_sell_opt = 'B'
+                    else:
+                        # trade_lot = int(prodmastObj.tradable_lot)
+                        # trade_gen = int(prodmastObj.tradable_lot * (prodmastObj.general_numerator / prodmastObj.general_denominator))
+                        tradeItems.quantity = (bfObj.brought_forward_short_qty * trade_gen) * -1
+                        tradeItems.rate = (bfObj.brought_forward_short_value / tradeItems.quantity)
+                        tradeItems.buy_sell_opt = 'S'
+
+                    tradeItems.trade_no = 'C' + str(int(tradeItems.rate * 10000))
+                    tradeItems.net_rate = tradeItems.rate
+                    tradeItems.amount = tradeItems.quantity * tradeItems.net_rate
+                    tradeItems.pre_brok_amount = tradeItems.quantity * tradeItems.rate
+                    tradeItems.save()
+                    tradeItems.refresh_from_db()
+                except:
+                    pass
+
+                """Construct CF qty"""
+
+                tdObj = TradeDetailItem.objects.filter(trade_security=tradeHead)
+                try:
+                    bftdObj = TradeDetailItem.objects.get(trade_security=tradeHead, trade_sr=1)
+                except:
+                    bftdObj = None
+
+                if constSecurityId == "M24012022GOLDM04Feb20220TRCHZP01":
+                    print("01042020BCOPPER30Apr20200CR00185")
+
+                sell_qty = tdObj.filter(buy_sell_opt='S').aggregate(sell=Sum(Abs('quantity')))['sell']
+                buy_qty = tdObj.filter(buy_sell_opt='B').aggregate(buy=Sum(Abs('quantity')))['buy']
+
+                if sell_qty is None:
+                    sell_qty = 0
+
+                if buy_qty is None:
+                    buy_qty = 0
+
+                diff_qty = sell_qty - buy_qty
+
+                if bftdObj is not None:
+                    pos = "B" if bftdObj.buy_sell_opt == "S" else "S"
+                else:
+                    pos = "N"
+
+                if diff_qty < 0:
+                    diff_qty = diff_qty * -1
+
+                if diff_qty > 0:
+                    tradeItems = TradeDetailItem()
+                    tradeItems.trade_security = tradeHead
+                    tradeItems.trade_sr = '9999'
+                    tradeItems.trade_tr = pos
+                    tradeItems.exchange = 'MCX'
+                    tradeItems.trade_no = tradeObjIDX.trade_no
+                    tradeItems.brokerage = 0
+                    tradeItems.buy_sell_opt = pos
+                    tradeItems.brokerage_logic = '2m'
+                    tradeItems.quantity = diff_qty
+                    try:
+                        # cn_rate = PositionMCX.objects.filter(transaction__transaction_id=self.pk,
+                        #                                      instrument_type=neItems.instrument_type,
+                        #                                      symbol=neItems.symbol,
+                        #                                      expiry_date=neItems.expiry_date)[0]
+                        cn_rate = ContractPriceMCX.objects.filter(transaction__transaction_id=self.pk,
+                                                                  instrument_type="FUTCOM",
+                                                                  symbol=neItems.instrument_type,
+                                                                  expiry_date=neItems.expiry_date)[0]
+                        tradeItems.rate = cn_rate.contract_close_price
+                        tradeItems.net_rate = tradeItems.rate
+                    except:
+                        tradeItems.rate = 0
+                        tradeItems.net_rate = 0
+                    tradeItems.trade_no = pos + str(int(tradeItems.rate * 10000))
+                    tradeItems.amount = tradeItems.quantity * tradeItems.net_rate
+                    tradeItems.pre_brok_amount = tradeItems.quantity * tradeItems.rate
+                    tradeItems.save()
+                    tradeItems.refresh_from_db()
+
+        """Process FUTIDX trade data"""
+        # procObjIDX = OnlineTransaction.objects.filter(transaction=self.pk,symbol='OPTIDX')
+        procObjIDX = PositionMCX.objects.filter(transaction=self.pk, symbol='FUTIDX',
+                                                position_date=tradeObjIDX.activity_time)
+        procClientObjIDX = procObjIDX.distinct('client_account_code')
+        # print(procClientObjIDX.count())
+    
+        for clientItem in procClientObjIDX:
+            trdObjIDX = OnlineTransactionMCX.objects.filter(transaction=self.pk, account_id=clientItem.client_account_code,
+                                                            instrument_name='FUTIDX')
+            # if clientItem.client_account_code == 'TRCHDT01':
+            #     print(clientItem.client_account_code)
+            if clientItem.client_account_code == "TRKKDC18":
+                print("TRKKDC18")
+            # if trdObjIDX.exists():
+            trdSecObjIDX = trdObjIDX.distinct('symbol')
+            for secItem in trdSecObjIDX:
+                # if secItem.symbol == "CRUDEOIL":
+                #     print("CRUDEOIL")
+                eachSecItemsObj = trdObjIDX.filter(symbol=secItem.symbol)
+                eachSecItemsExpObj = eachSecItemsObj.distinct('expiry_date')
+                for secItemExp in eachSecItemsExpObj:
+                    eachSecItemsExpDateObj = eachSecItemsObj.filter(expiry_date=secItemExp.expiry_date)
+                    eachSecItems = eachSecItemsExpDateObj[0]
+                    dictMonNumteachoName = {'01': 'Jan', '02': 'Feb', '03': 'Mar', '04': 'Apr', '05': 'May', '06': 'Jun',
+                                            '07': 'Jul', '08': 'Aug', '09': 'Sep', '10': 'Oct', '11': 'Nov', '12': 'Dec', }
+                    initDate = str(eachSecItems.expiry_date).split('-')
+    
+                    constrExpDate = initDate[2] + dictMonNumteachoName.get(initDate[1]) + initDate[0]
+                    constrExpDateUp = initDate[2] + dictMonNumteachoName.get(initDate[1]).upper() + initDate[0]
+    
+                    constSecurityId = str(self.pk) + str(eachSecItems.symbol) + constrExpDate + str(
+                        eachSecItems.strike_price) + str(clientItem.client_account_code)
+                    constSecurityNo = 'CF ' + str(eachSecItems.symbol) + ' ' + constrExpDate
+                    constSecurityName = eachSecItems.symbol
+                    if constSecurityId == "M23112022COPPER30Dec20220KA0099":
+                        print("Inside EO CE ADANIENT 30Apr2020 185")
+    
+                    prodmastObj1 = \
+                        ProductMCX.objects.filter(transaction__transaction_id=self.pk, symbol=eachSecItems.symbol,
+                                                  expiry_date=constrExpDateUp,
+                                                  instrument_name='FUTIDX')
+                    if prodmastObj1.exists():
+                        prodmastObj = prodmastObj1[0]
+                        trade_lot = int(prodmastObj.tradable_lot)
+                        trade_gen = int(
+                            prodmastObj.tradable_lot * (prodmastObj.general_numerator / prodmastObj.general_denominator))
+                    else:
+                        prodmastObj = \
+                        ProductMCX.objects.filter(transaction__transaction_id=self.pk, symbol=eachSecItems.symbol,
+                                                  instrument_name='FUTIDX')[0]
+                        trade_lot = int(prodmastObj.tradable_lot)
+                        trade_gen = int(
+                            prodmastObj.tradable_lot * (
+                                    prodmastObj.general_numerator / prodmastObj.general_denominator))
+                    if constSecurityNo == "CF CRUDEOIL 19Apr2021":
+                        print("CF ALUMINI 30Apr2020")
+    
+                    try:
+                        tradeHead = TradeDetail.objects.get(trade_security_id=constSecurityId,
+                                                            client=clientItem.client_account_code)
+                    except:
+                        tradeHead = TradeDetail()
+                        tradeHead.trade_security_id = constSecurityId
+                        tradeHead.trade_security_no = constSecurityNo
+                        tradeHead.trade_security_name = constSecurityName
+                    tradeHead.client = Client.objects.get(client_id=clientItem.client_account_code)
+                    tradeHead.trade_security_type = Enumeration.objects.get(enum_id='FUTIDX')
+                    tradeHead.transaction_id = self.pk
+                    tradeHead.trade_exchange = self.exchange
+                    tradeHead.symbol = eachSecItems.symbol
+                    tradeHead.instrument_type = eachSecItems.symbol
+                    tradeHead.trade_date = eachSecItems.activity_time
+                    tradeHead.expiry_date = eachSecItems.expiry_date
+                    tradeHead.save()
+                    tradeHead.refresh_from_db()
+    
+                    """Construct BF qty and value"""
+                    try:
+                        bfObj = PositionMCX.objects.get(transaction__transaction_id=self.pk,
+                                                        client_account_code=clientItem.client_account_code,
+                                                        instrument_type=eachSecItems.symbol, symbol='FUTIDX',
+                                                        expiry_date=eachSecItems.expiry_date)
+                        tradeItems = TradeDetailItem()
+                        tradeItems.trade_security = tradeHead
+                        tradeItems.trade_sr = '1'
+                        tradeItems.trade_tr = 'C'
+                        tradeItems.exchange = 'MCX'
+                        tradeItems.brokerage = 0
+                        tradeItems.brokerage_logic = '2m'
+    
+                        if bfObj.brought_forward_long_qty != 0:
+                            trade_lot = int(prodmastObj.tradable_lot)
+                            trade_gen = int(prodmastObj.tradable_lot * (
+                                        prodmastObj.general_numerator / prodmastObj.general_denominator))
+                            tradeItems.quantity = bfObj.brought_forward_long_qty * trade_gen
+                            tradeItems.rate = (bfObj.brought_forward_long_value / tradeItems.quantity)
+                            tradeItems.buy_sell_opt = 'B'
+                        else:
+                            trade_lot = int(prodmastObj.tradable_lot)
+                            trade_gen = int(prodmastObj.tradable_lot * (
+                                        prodmastObj.general_numerator / prodmastObj.general_denominator))
+                            tradeItems.quantity = (bfObj.brought_forward_short_qty * trade_gen) * -1
+                            tradeItems.rate = (bfObj.brought_forward_short_value / tradeItems.quantity)
+                            tradeItems.buy_sell_opt = 'S'
+    
+                        tradeItems.trade_no = 'C' + str(int(tradeItems.rate * 10000))
+                        tradeItems.net_rate = tradeItems.rate
+                        tradeItems.amount = tradeItems.quantity * tradeItems.net_rate
+                        tradeItems.pre_brok_amount = tradeItems.quantity * tradeItems.rate
+                        tradeItems.save()
+                        tradeItems.refresh_from_db()
+                    except:
+                        pass
+    
+                    for itemsObj in eachSecItemsExpDateObj:
+                        tradeItems = TradeDetailItem()
+                        tradeItems.trade_security = tradeHead
+                        tradeItems.trade_sr = '2'
+                        tradeItems.trade_tr = 'TN'
+                        tradeItems.exchange = 'MCX'
+                        tradeItems.trade_no = itemsObj.trade_id
+                        # tradeItems.order_trade_time = itemsObj.last_modified_date.time()
+                        tradeItems.ctcl_id = itemsObj.order_no
+                        tradeItems.user_id = itemsObj.user_id
+                        if itemsObj.buy_sell_ind_id == 1:
+                            tradeItems.buy_sell_opt = 'B'
+                        if itemsObj.buy_sell_ind_id == 2:
+                            tradeItems.buy_sell_opt = 'S'
+                        trade_lot = int(prodmastObj.tradable_lot)
+                        trade_gen = int(
+                            prodmastObj.tradable_lot * (prodmastObj.general_numerator / prodmastObj.general_denominator))
+                        tradeItems.quantity = itemsObj.trade_qty * trade_gen
+                        tradeItems.rate = itemsObj.trade_price
+    
+                        """Construct Brokerage Logics"""
+                        try:
+                            try:
+                                brokLogic = ClientBrokerage.objects.get(client=clientItem.client_account_code,
+                                                                        client_exchange=Exchange.objects.get(
+                                                                            exchange_id='MCX'),
+                                                                        from_date__lte=eachSecItems.activity_time)
+                            except:
+                                try:
+                                    brokLogic = \
+                                        ClientBrokerageHistory.objects.filter(client=clientItem.client_account_code,
+                                                                              client_exchange=Exchange.objects.get(
+                                                                                  exchange_id='MCX')).filter(
+                                            Q(from_date__lte=eachSecItems.activity_time) & Q(
+                                                thru_date__gte=eachSecItems.activity_time))[0]
+
+                                except:
+                                    brokLogic = ClientBrokerage.objects.filter(
+                                        client=clientItem.client_account_code,
+                                        client_exchange=Exchange.objects.get(
+                                            exchange_id='MCX'))[0]
+                            # percenLogic = brokLogic.brok_percent.brokerage_one_side_percent
+                            # minLogic = brokLogic.brok_percent.brokerage_one_side_min
+
+                            lot = trade_lot
+                            brok_obj = BrokerageMCXItem.objects.get(module=brokLogic.brok_percent_mcx,
+                                                                    product=prodmastObj.symbol)
+
+                            brok_perc = brok_obj.brokerage_one_side_percent
+                            brok_min = brok_obj.brokerage_one_side_min * tradeItems.quantity
+                            brok_percentage = round((tradeItems.rate * brok_perc)/100,4)
+                            res_round_val = Decimal(brok_percentage).quantize(Decimal('1.000'),
+                                                                        rounding=ROUND_HALF_UP)
+
+                            brok_tot_perc = tradeItems.quantity * res_round_val
+                            if brok_tot_perc > brok_min:
+                                tradeItems.brokerage = brok_tot_perc
+                            if brok_min > brok_tot_perc:
+                                tradeItems.brokerage = brok_min
+                            tradeItems.brokerage_total = tradeItems.brokerage
+                            if tradeItems.buy_sell_opt == 'S':
+                                tradeItems.net_rate = tradeItems.rate + (tradeItems.brokerage/100)
+                            if tradeItems.buy_sell_opt == 'B':
+                                tradeItems.net_rate = tradeItems.rate + (tradeItems.brokerage/100)
+
+                        except:
+                            tradeItems.brokerage = 0
+                            tradeItems.brokerage_total = 0
+                            tradeItems.brokerage_logic = '2m'
+                            tradeItems.net_rate = tradeItems.rate
+
+                            try:
+                                clieBrokex = ClientBillWithoutBrokerage.objects.get(
+                                    client=Client.objects.get(client_id=clientItem.client_account_code))
+                                pass
+                            except:
+                                clieWOBrok = ClientBillWithoutBrokerage()
+                                clieWOBrok.transaction = self
+                                clieWOBrok.client = Client.objects.get(client_id=clientItem.client_account_code)
+                                clieWOBrok.save()
+                                clieWOBrok.refresh_from_db()
+
+                        tradeItems.amount = round(tradeItems.quantity * tradeItems.net_rate, 2)
+                        tradeItems.pre_brok_amount = tradeItems.quantity * tradeItems.rate
+                        sttCharge = 0
+                        sdCharge = 0
+                        if tradeItems.buy_sell_opt == 'S':
+                            try:
+                                stt_charge = SecurityTransactionTax.objects.filter(status='Active',
+                                                                                   market_type=self.exchange)[0]
+                                sttCharge = tradeItems.pre_brok_amount * (stt_charge.future_ctt_charge / 100)
+                            except:
+                                sttCharge = 0
+                        elif tradeItems.buy_sell_opt == 'B':
+                            try:
+                                sd_charge = StampDuty.objects.get(status='Active')
+                                sdCharge = tradeItems.pre_brok_amount * (sd_charge.futures_charge / 100)
+                            except:
+                                sdCharge = 0
+                        else:
+                            sttCharge = 0
+                            sdCharge = 0
+                        try:
+                            try:
+                                turnover_charge = Turnover.objects.filter(status='Active', market_type=self.exchange,
+                                                                          scrip_group=prodmastObj.symbol)[0]
+                            except:
+                                turnover_charge = \
+                                Turnover.objects.filter(status='Active', market_type=self.exchange, scrip_group='Main')[
+                                    0]
+                            turnCharge = tradeItems.pre_brok_amount * (turnover_charge.turn_over_charge / 100)
+                        except:
+                            turnCharge = 0
+                        try:
+                            clear_charge = ClearingCharges.objects.filter(status='Active')[0]
+                            clearCharge = tradeItems.pre_brok_amount * (clear_charge.mcx_futures / 100)
+                        except:
+                            clearCharge = 0
+
+                        try:
+                            gstin_charge = GSTIN.objects.filter(status='Active')[0]
+                            gstin = tradeItems.pre_brok_amount * (stax_charge.igst / 100)
+                        except:
+                            gstin = 0
+                        try:
+                            sebi_charge = Sebi.objects.filter(status='Active')[0]
+                            sebiCharge = tradeItems.pre_brok_amount * (sebi_charge.sebi_charge / 100)
+                        except:
+                            sebiCharge = 0
+                        try:
+                            stax_charge = ServiceCharge.objects.filter(status='Active')[0]
+                            staxCharge = (tradeItems.brokerage_total + turnCharge + sebiCharge) * (stax_charge.rate / 100)
+                        except:
+                            staxCharge = 0
+                        tradeItems.turnover = turnCharge
+                        tradeItems.stt = sttCharge
+                        tradeItems.service_tax = staxCharge
+                        tradeItems.sebi = sebiCharge
+                        tradeItems.stamp_duty = sdCharge
+                        tradeItems.clear_charge = clearCharge
+                        tradeItems.brok_amount = tradeItems.quantity * tradeItems.brokerage
+                        tradeItems.save()
+                        tradeItems.refresh_from_db()
+    
+                    # if constSecurityNo == "IF BANKNIFTY 30Apr2020":
+                    #     print("IF BANKNIFTY 30Apr2020")
+                    """Construct CF qty"""
+    
+                    tdObj = TradeDetailItem.objects.filter(trade_security=tradeHead)
+                    try:
+                        bftdObj = TradeDetailItem.objects.get(trade_security=tradeHead, trade_sr=1)
+    
+                    except:
+                        bftdObj = None
+
+                    sell_qty = tdObj.filter(buy_sell_opt='S').aggregate(sell=Sum(Abs('quantity')))['sell']
+                    buy_qty = tdObj.filter(buy_sell_opt='B').aggregate(buy=Sum(Abs('quantity')))['buy']
+
+                    if sell_qty is None:
+                        sell_qty = 0
+    
+                    if buy_qty is None:
+                        buy_qty = 0
+    
+                    diff_qty = sell_qty - buy_qty
+    
+                    if bftdObj is not None:
+                        pos = "B" if bftdObj.buy_sell_opt == "S" else "S"
+                    else:
+                        pos = "N"
+    
+                    if diff_qty < 0:
+                        diff_qty = diff_qty * -1
+    
+                    # if constSecurityId == "01042020BCOPPER30Apr20200CR00185":
+                    #     print("01042020BCOPPER30Apr20200CR00185")
+    
+                    if diff_qty > 0:
+                        tradeItems = TradeDetailItem()
+                        tradeItems.trade_security = tradeHead
+                        tradeItems.trade_sr = '9999'
+                        tradeItems.trade_tr = pos
+                        tradeItems.exchange = 'MCX'
+    
+                        tradeItems.brokerage = 0
+                        tradeItems.buy_sell_opt = pos
+                        tradeItems.brokerage_logic = '2m'
+                        tradeItems.quantity = diff_qty
+                        # cn_rate = PositionMCX.objects.filter(transaction__transaction_id=self.pk,
+                        #                                      instrument_type=eachSecItems.symbol,
+                        #                                      symbol=eachSecItems.instrument_name,
+                        #                                      expiry_date=eachSecItems.expiry_date)[0]
+                        cn_rate = ContractPriceMCX.objects.filter(transaction__transaction_id=self.pk,
+                                                                  instrument_type=eachSecItems.instrument_name,
+                                                                  symbol=eachSecItems.symbol,
+                                                                  expiry_date=eachSecItems.expiry_date)[0]
+                        tradeItems.rate = cn_rate.contract_close_price
+                        tradeItems.amount = tradeItems.quantity * tradeItems.rate
+                        tradeItems.trade_no = pos + str(int(tradeItems.rate * 10000))
+                        tradeItems.pre_brok_amount = tradeItems.quantity * tradeItems.rate
+                        tradeItems.save()
+                        tradeItems.refresh_from_db()
+    
+            # else:
+            #     pass
+    
+        """Process FUTIDX not exists logics"""
+
+        procObjNEIDX = PositionMCX.objects.filter(transaction=self.pk, symbol='FUTIDX',
+                                                  position_date=tradeObjIDX.activity_time)
+
+        for neItems in procObjNEIDX:
+            # print(str(int(neItems.strike_price)))
+
+            onTransEObj = OnlineTransactionMCX.objects.filter(transaction=self.pk, account_id=neItems.client_account_code,
+                                                              instrument_name=neItems.symbol,
+                                                              symbol=neItems.instrument_type,
+                                                              expiry_date=neItems.expiry_date)
+            if neItems.client_account_code == "TRKKDC18":
+                print("TRKKDC18")
+            if onTransEObj.exists():
+                pass
+            else:
+                dictMonNumteachoName = {'01': 'Jan', '02': 'Feb', '03': 'Mar', '04': 'Apr', '05': 'May', '06': 'Jun',
+                                        '07': 'Jul', '08': 'Aug', '09': 'Sep', '10': 'Oct', '11': 'Nov', '12': 'Dec', }
+                initDate = str(neItems.expiry_date).split('-')
+                constrExpDate = initDate[2] + dictMonNumteachoName.get(initDate[1]) + initDate[0]
+                constrExpDateUp = initDate[2] + dictMonNumteachoName.get(initDate[1]).upper() + initDate[0]
+                constSecurityId = str(self.pk) + str(neItems.instrument_type) + constrExpDate + str(
+                    int(neItems.strike_price)) + str(neItems.client_account_code)
+                constSecurityNo = 'CF ' + str(neItems.instrument_type) + ' ' + constrExpDate
+                constSecurityName = neItems.instrument_type
+                prodmastObj01 = ProductMCX.objects.filter(transaction__transaction_id=self.pk,
+                                                          symbol=neItems.instrument_type,
+                                                          expiry_date=constrExpDateUp,
+                                                          instrument_name='FUTIDX')
+                if constSecurityId == "M23112022COPPER30Dec20220KA0099":
+                    print("Inside EO CE ADANIENT 30Apr2020 185")
+                if prodmastObj01.exists():
+                    prodmastObj = prodmastObj01[0]
+                    trade_lot = int(prodmastObj.tradable_lot)
+                    trade_gen = int(
+                        prodmastObj.tradable_lot * (prodmastObj.general_numerator / prodmastObj.general_denominator))
+                else:
+                    prodmastObj = \
+                    ProductMCX.objects.filter(transaction__transaction_id=self.pk, symbol=neItems.instrument_type,
+                                              instrument_name='FUTIDX')[0]
+                    trade_lot = int(prodmastObj.tradable_lot)
+                    trade_gen = int(
+                        prodmastObj.tradable_lot * (
+                                prodmastObj.general_numerator / prodmastObj.general_denominator))
+
+
+                try:
+                    tradeHead = TradeDetail.objects.get(trade_security_id=constSecurityId,
+                                                        client=neItems.client_account_code)
+                except:
+                    tradeHead = TradeDetail()
+                    tradeHead.trade_security_id = constSecurityId
+                    tradeHead.trade_security_no = constSecurityNo
+                    tradeHead.trade_security_name = constSecurityName
+                tradeHead.client = Client.objects.get(client_id=neItems.client_account_code)
+                tradeHead.trade_security_type = Enumeration.objects.get(enum_id='FUTIDX')
+                tradeHead.transaction_id = self.pk
+                tradeHead.trade_exchange = self.exchange
+                tradeHead.symbol = neItems.instrument_type
+                tradeHead.instrument_type = neItems.instrument_type
+                tradeHead.expiry_date = neItems.expiry_date
+                # tradeHead.trade_date = neItems.activity_time
+                tradeHead.save()
+                tradeHead.refresh_from_db()
+
+                """Construct BF qty and value"""
+                try:
+                    bfObj = PositionMCX.objects.get(transaction__transaction_id=self.pk,
+                                                    client_account_code=neItems.client_account_code,
+                                                    instrument_type=neItems.instrument_type, symbol='FUTIDX',
+                                                    expiry_date=neItems.expiry_date)
+                    tradeItems = TradeDetailItem()
+                    tradeItems.trade_security = tradeHead
+                    tradeItems.trade_sr = '1'
+                    tradeItems.trade_tr = 'C'
+                    tradeItems.exchange = 'MCX'
+                    tradeItems.brokerage = 0
+                    tradeItems.brokerage_logic = '2m'
+
+                    if bfObj.brought_forward_long_qty != 0:
+                        # trade_lot = int(prodmastObj.tradable_lot)
+                        # trade_gen = int(prodmastObj.tradable_lot * (prodmastObj.general_numerator / prodmastObj.general_denominator))
+                        tradeItems.quantity = bfObj.brought_forward_long_qty * trade_gen
+                        tradeItems.rate = (bfObj.brought_forward_long_value / tradeItems.quantity)
+                        tradeItems.buy_sell_opt = 'B'
+                    else:
+                        # trade_lot = int(prodmastObj.tradable_lot)
+                        # trade_gen = int(prodmastObj.tradable_lot * (prodmastObj.general_numerator / prodmastObj.general_denominator))
+                        tradeItems.quantity = (bfObj.brought_forward_short_qty * trade_gen) * -1
+                        tradeItems.rate = (bfObj.brought_forward_short_value / tradeItems.quantity)
+                        tradeItems.buy_sell_opt = 'S'
+
+                    tradeItems.trade_no = 'C' + str(int(tradeItems.rate * 10000))
+                    tradeItems.net_rate = tradeItems.rate
+                    tradeItems.amount = tradeItems.quantity * tradeItems.net_rate
+                    tradeItems.pre_brok_amount = tradeItems.quantity * tradeItems.rate
+                    tradeItems.save()
+                    tradeItems.refresh_from_db()
+                except:
+                    pass
+
+                """Construct CF qty"""
+
+                tdObj = TradeDetailItem.objects.filter(trade_security=tradeHead)
+                try:
+                    bftdObj = TradeDetailItem.objects.get(trade_security=tradeHead, trade_sr=1)
+                except:
+                    bftdObj = None
+
+                if constSecurityId == "M26122022MCXBULLDEX24Jan20230AK011":
+                    print("01042020BCOPPER30Apr20200CR00185")
+
+                sell_qty = tdObj.filter(buy_sell_opt='S').aggregate(sell=Sum(Abs('quantity')))['sell']
+                buy_qty = tdObj.filter(buy_sell_opt='B').aggregate(buy=Sum(Abs('quantity')))['buy']
+
+                if sell_qty is None:
+                    sell_qty = 0
+
+                if buy_qty is None:
+                    buy_qty = 0
+
+                diff_qty = sell_qty - buy_qty
+
+                if bftdObj is not None:
+                    pos = "B" if bftdObj.buy_sell_opt == "S" else "S"
+                else:
+                    pos = "N"
+
+                if diff_qty < 0:
+                    diff_qty = diff_qty * -1
+
+                if diff_qty > 0:
+                    tradeItems = TradeDetailItem()
+                    tradeItems.trade_security = tradeHead
+                    tradeItems.trade_sr = '9999'
+                    tradeItems.trade_tr = pos
+                    tradeItems.exchange = 'MCX'
+                    tradeItems.trade_no = tradeObjIDX.trade_no
+                    tradeItems.brokerage = 0
+                    tradeItems.buy_sell_opt = pos
+                    tradeItems.brokerage_logic = '2m'
+                    tradeItems.quantity = diff_qty
+                    try:
+                        # cn_rate = PositionMCX.objects.filter(transaction__transaction_id=self.pk,
+                        #                                      instrument_type=neItems.instrument_type,
+                        #                                      symbol=neItems.symbol,
+                        #                                      expiry_date=neItems.expiry_date)[0]
+                        cn_rate = ContractPriceMCX.objects.filter(transaction__transaction_id=self.pk,
+                                                                  instrument_type=neItems.symbol,
+                                                                  symbol=neItems.instrument_type,
+                                                                  expiry_date=neItems.expiry_date)[0]
+                        tradeItems.rate = cn_rate.contract_close_price
+                        tradeItems.net_rate = tradeItems.rate
+                    except:
+                        tradeItems.rate = 0
+                        tradeItems.net_rate = 0
+                    tradeItems.trade_no = pos + str(int(tradeItems.rate * 10000))
+                    tradeItems.amount = tradeItems.quantity * tradeItems.net_rate
+                    tradeItems.pre_brok_amount = tradeItems.quantity * tradeItems.rate
+                    tradeItems.save()
+                    tradeItems.refresh_from_db()
